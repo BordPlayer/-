@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>체스 · 오목 통합 최종본 (AI vs AI 지원)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/1.0.0/chess.min.js">function onDifficultyChange(){
+ const d=document.getElementById('difficulty').value;
+ document.getElementById('eloBox').style.display=(d==='custom')?'block':'none';
+}
+function updateEloLabel(){
+ const v=document.getElementById('eloSlider').value;
+ customElo=v;
+ document.getElementById('eloLabel').textContent=v;
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/stockfish@16.0.0/stockfish.js"></script>
+<style>
+body{background:#222;color:#eee;font-family:Arial;margin:0;padding:0}
+button,select,input{margin:4px;padding:6px;font-size:14px}
+#menu,#game{max-width:960px;margin:auto;padding:10px}
+.cell{width:40px;height:40px;border:1px solid #555;display:flex;align-items:center;justify-content:center;font-size:22px;touch-action:manipulation}
+.row{display:flex}
+/* 모바일 대응 */
+@media (max-width: 768px){
+ #menu,#game{padding:6px}
+ h2{font-size:18px}
+ .cell{width:28px;height:28px;font-size:16px}
+ #board{overflow:auto}
+ #moves{height:200px}
+ button,select,input{font-size:13px;padding:4px}
+}
+@media (max-width: 480px){
+ .cell{width:22px;height:22px;font-size:14px}
+ #evalBox{display:none}
+}
+</style>
+</head>
+<body>
+
+<div id="menu">
+<h2>게임 설정</h2>
+게임 <select id="gameType"><option value="chess">체스</option><option value="gomoku">오목(렌주)</option></select><br>
+난이도 <select id="difficulty" onchange="onDifficultyChange()">
+<option value="very_easy">매우 쉬움 (~800)</option>
+<option value="easy">쉬움 (~1200)</option>
+<option value="normal" selected>보통 (~1600)</option>
+<option value="hard">어려움 (~2000)</option>
+<option value="very_hard">매우 어려움 (~2400)</option>
+<option value="custom">커스텀 ELO</option>
+<option value="aivai">AI vs AI</option>
+</select>
+<div id="eloBox" style="display:none;margin-top:6px;">
+ELO: <input type="range" id="eloSlider" min="800" max="3000" step="50" value="1600" oninput="updateEloLabel()">
+<span id="eloLabel">1600</span>
+</div><br>
+<button onclick="startGame()">시작</button>
+</div>
+
+<div id="game" style="display:none">
+<h2 id="title"></h2>
+<button onclick="undoMove()">되돌리기</button>
+<button onclick="exportRecord()">기보 저장</button>
+<div style="display:flex">
+<div id="board"></div>
+<div style="margin-left:10px;width:220px">
+ <div id="evalBox" style="height:300px;border:1px solid #555;position:relative;background:#111">
+  <div id="evalBar" style="position:absolute;bottom:50%;width:100%;height:0;background:#eee"></div>
+  <div id="evalText" style="position:absolute;top:50%;width:100%;text-align:center;font-size:14px">0.00</div>
+ </div>
+ <div id="moves" style="margin-top:10px;height:300px;overflow:auto;border:1px solid #555;padding:5px"></div>
+</div>
+</div>
+</div>
+</div>
+
+<script>
+/* ===== 공통 ===== */
+let gameType,difficulty;
+let moveHistory=[];
+let moveListEl;
+function updateMoveList(){
+ moveListEl.innerHTML='';
+ moveHistory.forEach((m,i)=>{
+  const d=document.createElement('div');d.style.cursor='pointer';
+  d.innerText=gameType==='chess'?(i+1)+'. '+m.san:(i+1)+'. '+(m.color==='B'?'●':'○')+'('+ (m.x+1)+','+(m.y+1)+')';
+  d.onclick=()=>jumpToMove(i);
+  moveListEl.appendChild(d);
+ });
+}
+function undoMove(){ if(!moveHistory.length) return; moveHistory.pop(); jumpToMove(moveHistory.length-1); }
+function exportRecord(){
+ if(gameType==='chess'){
+  const blob=new Blob([chess.pgn()],{type:'text/plain'});
+  download(blob,'game.pgn');
+ }else{
+  download(new Blob([gomokuToSGF()],{type:'text/plain'}),'game.sgf');
+ }
+}
+function download(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();}
+
+/* ===== 체스 ===== */
+let chess,engine;
+const eloMap={very_easy:800,easy:1200,normal:1600,hard:2000,very_hard:2400};
+let customElo=1600;
+function startChess(){
+ chess=new Chess();
+ engine=Stockfish();
+ engine.postMessage('uci');
+ engine.postMessage('setoption name UCI_LimitStrength value true');
+ let elo=1600;
+ if(difficulty==='custom') elo=customElo;
+ else if(difficulty!=='aivai') elo=eloMap[difficulty]||1600;
+ engine.postMessage('setoption name UCI_Elo value '+elo);
+ renderChess();
+ if(difficulty==='aivai') setTimeout(runChessAIvsAI,300);
+}{
+ chess=new Chess();
+ if(difficulty!=='very_easy' && difficulty!=='easy'){
+  engine=Stockfish();
+  engine.postMessage('uci');
+  engine.postMessage('setoption name UCI_LimitStrength value true');
+  if(difficulty!=='aivai') engine.postMessage('setoption name UCI_Elo value '+(eloMap[difficulty]||1600));
+ }
+ renderChess();
+ if(difficulty==='aivai') setTimeout(runChessAIvsAI,300);
+}
+function renderChess(){ board.innerHTML=''; const b=chess.board();
+ for(let r=7;r>=0;r--){const row=document.createElement('div');row.className='row';
+  for(let c=0;c<8;c++){const d=document.createElement('div');d.className='cell';
+   const sq=String.fromCharCode(97+c)+(r+1);
+   if(b[r][c]) d.innerText=b[r][c].type.toUpperCase();
+   if(difficulty!=='aivai') d.onclick=()=>playerMove(sq);
+   row.appendChild(d);
+  } board.appendChild(row);
+ }
+}
+let selected=null;
+function playerMove(sq){ if(!selected){selected=sq;return;} const m=chess.move({from:selected,to:sq}); selected=null; if(!m) return;
+ moveHistory.push(m); updateMoveList(); renderChess(); setTimeout(chessAI,300); }
+function chessAI(){
+ if(chess.game_over()) return;
+ if(engine){
+  engine.postMessage('position fen '+chess.fen());
+  engine.postMessage('go movetime 300');
+  engine.onmessage=e=>{
+   const line=e.data||e;
+   if(typeof line==='string' && line.startsWith('bestmove')){
+    const m=line.split(' ')[1];
+    chess.move({from:m.slice(0,2),to:m.slice(2,4),promotion:'q'});
+    moveHistory.push(chess.history({verbose:true}).slice(-1)[0]);
+    updateMoveList(); renderChess();
+   }
+  };
+  return;
+ }
+ const moves=chess.moves();
+ const m=moves[Math.floor(Math.random()*moves.length)];
+ chess.move(m);
+ moveHistory.push(chess.history({verbose:true}).slice(-1)[0]);
+ updateMoveList(); renderChess();
+}).slice(-1)[0]); updateMoveList(); renderChess(); }
+function runChessAIvsAI(){
+ if(chess.game_over()) return;
+ if(!engine){ engine=Stockfish(); engine.postMessage('uci'); engine.postMessage('setoption name UCI_LimitStrength value true'); engine.postMessage('setoption name UCI_Elo value 1600'); }
+ engine.postMessage('position fen '+chess.fen());
+ engine.postMessage('go movetime 200');
+ engine.onmessage=e=>{
+  const line=e.data||e;
+  if(typeof line==='string' && line.startsWith('bestmove')){
+   const m=line.split(' ')[1];
+   chess.move({from:m.slice(0,2),to:m.slice(2,4),promotion:'q'});
+   moveHistory.push(chess.history({verbose:true}).slice(-1)[0]);
+   updateMoveList(); renderChess();
+   setTimeout(runChessAIvsAI,300);
+  }
+ };
+}).slice(-1)[0]); updateMoveList(); renderChess();
+ setTimeout(runChessAIvsAI,300);
+}
+function jumpToMove(idx){ if(gameType==='chess'){
+ chess.reset(); for(let i=0;i<=idx;i++) chess.move(moveHistory[i]); renderChess(); }}
+
+/* ===== 오목 (렌주) ===== */
+const SIZE=15,E='',B='B',W='W'; let g=[];
+function startGomoku(){ g=Array.from({length:SIZE},()=>Array(SIZE).fill(E)); renderG(); if(difficulty==='aivai') setTimeout(runGomokuAIvsAI,300); }
+function renderG(){ board.innerHTML='';
+ for(let y=0;y<SIZE;y++){const r=document.createElement('div');r.className='row';
+  for(let x=0;x<SIZE;x++){const d=document.createElement('div');d.className='cell'; d.innerText=g[y][x]==='B'?'●':g[y][x]==='W'?'○':'';
+   if(difficulty!=='aivai') d.onclick=()=>put(x,y);
+   r.appendChild(d);
+  } board.appendChild(r);
+ }
+}
+function put(x,y){ if(g[y][x]) return; g[y][x]=B; moveHistory.push({x,y,color:'B'}); updateMoveList(); renderG(); setTimeout(aiG,300); }
+function aiG(){ for(let y=0;y<SIZE;y++)for(let x=0;x<SIZE;x++) if(!g[y][x]){ g[y][x]=W; moveHistory.push({x,y,color:'W'}); updateMoveList(); renderG(); return; }}
+function runGomokuAIvsAI(){
+ for(let c of ['B','W']){
+  for(let y=0;y<SIZE;y++)for(let x=0;x<SIZE;x++) if(!g[y][x]){ g[y][x]=c; moveHistory.push({x,y,color:c}); updateMoveList(); renderG(); break; }
+ }
+ setTimeout(runGomokuAIvsAI,300);
+}
+function jumpToMove(idx){ if(gameType==='gomoku'){
+ g=Array.from({length:SIZE},()=>Array(SIZE).fill(E));
+ for(let i=0;i<=idx;i++){ const m=moveHistory[i]; g[m.y][m.x]=m.color; }
+ renderG(); }}
+function gomokuToSGF(){ let s='(;GM[1]SZ[15]'; moveHistory.forEach(m=>{s+=`;${m.color}[${String.fromCharCode(97+m.x)}${String.fromCharCode(97+m.y)}]`;}); return s+')'; }
+
+/* ===== 시작 ===== */
+const board=document.getElementById('board');
+function startGame(){
+ gameType=document.getElementById('gameType').value;
+ difficulty=document.getElementById('difficulty').value;
+ moveHistory=[];
+ document.getElementById('menu').style.display='none';
+ document.getElementById('game').style.display='block';
+ document.getElementById('title').innerText=gameType==='chess'?'체스':'오목';
+ moveListEl=document.getElementById('moves'); moveListEl.innerHTML='';
+ gameType==='chess'?startChess():startGomoku();
+}
+</script>
+</body>
+</html>
